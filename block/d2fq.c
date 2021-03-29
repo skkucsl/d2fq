@@ -21,26 +21,19 @@
 
 #ifdef CONFIG_IOSCHED_D2FQ
 
-#define	MAX_D2FQ_ARR		128
-#define	MAX_D2FQ_ARR_LOG	100
-
-#define D2FQ_THRSH_MIN_STEP	105		/* around 20KB based on weight 1 flow*/
-#define D2FQ_THRSH_MIN		840		/* around 20KB based on weight 1 flow*/
-
 #define D2FQ_CLS_WGHT_MIN	3		/* around 20KB based on weight 1 flow*/
 #define D2FQ_CLS_WGHT_MAX	256		/* around 20KB based on weight 1 flow*/
 
 unsigned int sysctl_d2fq_read_weight = 1;	/* read weight */
 unsigned int sysctl_d2fq_write_weight = 1;	/* write weight */
 
-unsigned int sysctl_d2fq_thrsh = 4096;		/* 512KB*read_weight */
+unsigned int sysctl_d2fq_thrsh = 8192;		/* 8MB */
 unsigned int sysctl_d2fq_cls_base = D2FQ_CLS_WGHT_MIN;		/* class base weight */
          int        next_cap_weight = 0;
-unsigned int sysctl_d2fq_perqw = 0; 		/* *** depriciated *** */
          int sysctl_d2fq_md_ratio = 70;		/* medium range ratio - auto set on neg. val */
 
-unsigned int sysctl_d2fq_di_period = 50;	/* level threshold period */
-						/*  1=0.004(sec) 25=0.1(sec) 50=0.2(sec) */
+unsigned int sysctl_d2fq_di_period = 50;	/* criteria for deceptive idlenss */
+						/* 1=0.004(sec) 25=0.1(sec) 50=0.2(sec) */
 
 unsigned int sysctl_d2fq_dw_en = 0; 		/* dynamic weight change enable */
 unsigned int sysctl_d2fq_dw_period = 50;	/* dynamic weight change period 1 = 1/250 (sec) */
@@ -411,7 +404,7 @@ new_dd:
 }
 EXPORT_SYMBOL(d2fq_assign_dd);
 
-/* FIXME IMPLEMENT Minimum searching tree for scalability issues  */
+/* update minimum virtual time among flows */
 void d2fq_update_gvt(struct d2fq_data *dd)
 {
 	struct d2fq_global_data *dgd = dd->dgd;
@@ -445,7 +438,7 @@ void __d2fq_update_vt(struct d2fq_data *dd, unsigned cls, unsigned dlen)
 
 	lvt = atomic64_add_return(tmp, &dd->lvt);
 	if(unlikely(lvt >= U64_MAX-U8_MAX))
-		printk(KERN_ERR "d2fq: Real ERROR!!! overflow!!!");
+		printk(KERN_ERR "d2fq: overflow occurs on virtual time domain");
 	/* Update global VT */
 	d2fq_update_gvt(dd);
 	/* no more inflight request */
