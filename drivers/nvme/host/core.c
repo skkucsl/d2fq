@@ -1994,6 +1994,13 @@ int nvme_enable_ctrl(struct nvme_ctrl *ctrl, u64 cap)
 
 	ctrl->ctrl_config = NVME_CC_CSS_NVM;
 	ctrl->ctrl_config |= (page_shift - 12) << NVME_CC_MPS_SHIFT;
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* Enable WRR feature if possible */
+	if (NVME_CAP_AMS_WRRU(cap)) {
+		dev_info(ctrl->device, "d2fq: WRRU arbitration supported\n");
+		ctrl->ctrl_config |= NVME_CC_AMS_WRRU | NVME_CC_SHN_NONE;
+	} else
+#endif
 	ctrl->ctrl_config |= NVME_CC_AMS_RR | NVME_CC_SHN_NONE;
 	ctrl->ctrl_config |= NVME_CC_IOSQES | NVME_CC_IOCQES;
 	ctrl->ctrl_config |= NVME_CC_ENABLE;

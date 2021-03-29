@@ -2402,6 +2402,11 @@ long _do_fork(struct kernel_clone_args *args)
 		get_task_struct(p);
 	}
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* not share d2fq struct btw process */
+	p->d2fq = NULL;
+	spin_lock_init(&p->d2fq_lock);
+#endif
 	wake_up_new_task(p);
 
 	/* forking complete and child started to run, tell ptracer */

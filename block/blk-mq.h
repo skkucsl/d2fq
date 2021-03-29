@@ -4,6 +4,7 @@
 
 #include "blk-stat.h"
 #include "blk-mq-tag.h"
+#include "d2fq.h"
 
 struct blk_mq_tag_set;
 
@@ -137,9 +138,35 @@ static inline enum mq_rq_state blk_mq_rq_state(struct request *rq)
 	return READ_ONCE(rq->state);
 }
 
+
+#if (defined(CONFIG_IOSCHED_D2FQ) && (!defined(CONFIG_IOSCHED_D2FQ_MULTISQ)))
+static inline int blk_mq_d2fq_set_request_class(struct request_queue *q, unsigned int cpu)
+{
+	int cls;
+	unsigned nr_sets_per_node = ((num_possible_cpus() / num_possible_nodes()) / 3);
+	unsigned nr_q = (num_possible_cpus() / num_possible_nodes()) / nr_sets_per_node;
+	unsigned set_id = raw_smp_processor_id() / nr_q;
+	struct d2fq_data *dd = d2fq_assign_dd(q->dgd);
+
+	if (q->d2fq_en == false)
+		return cpu;
+
+	cls = __d2fq_start_request(dd);
+	if (cls <= 0)
+		return cpu;
+	return nr_q*set_id + cls - 1;
+}
+#endif
+
 static inline struct blk_mq_ctx *__blk_mq_get_ctx(struct request_queue *q,
 					   unsigned int cpu)
 {
+#if (defined(CONFIG_IOSCHED_D2FQ) && (!defined(CONFIG_IOSCHED_D2FQ_MULTISQ)))
+	/* select queue to send request for shared queue env. */
+	if (current->flags & PF_D2FQ)
+		return per_cpu_ptr(q->queue_ctx, blk_mq_d2fq_set_request_class(q, cpu));
+	else
+#endif
 	return per_cpu_ptr(q->queue_ctx, cpu);
 }
 

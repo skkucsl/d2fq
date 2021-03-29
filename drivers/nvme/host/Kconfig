@@ -74,14 +74,24 @@ config NVME_TCP
 
 	  If unsure, say N.
 
-config NVME_WRR_FSCHED
-	tristate "[WOO] NVMe Fair scheduling using WRRU feature"
+config IOSCHED_D2FQ
+	tristate "Device Drict Fair Queueing (D2FQ)"
+	help
+	  This provides fair I/O scheduling for NVMe device using 
+	  WRRU arbitration.
+
+config IOSCHED_D2FQ_MULTISQ
+	tristate "Three classes of SQ per each io queue pair"
+	depends on IOSCHED_D2FQ
+	default n
 	help
 	  This provides fair scheduling for NVMe device using 
 	  WRRU arbitration.
 
-config NVME_WRR_FSCHED_DEBUG
-	tristate "[WOO] Debugging CONFIG for NVME_WRR_FSCHED"
+config IOSCHED_D2FQ_VERBOSE
+	depends on IOSCHED_D2FQ
+	default n
+	tristate "Verbose configuration for D2FQ"
 	help
 	  This provides debuging configuration for NVMe device fair scheduling 
 	  using WRRU arbitration.

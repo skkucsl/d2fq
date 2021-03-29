@@ -118,6 +118,9 @@ enum {
 #define NVME_CAP_NSSRC(cap)	(((cap) >> 36) & 0x1)
 #define NVME_CAP_MPSMIN(cap)	(((cap) >> 48) & 0xf)
 #define NVME_CAP_MPSMAX(cap)	(((cap) >> 52) & 0xf)
+#ifdef CONFIG_IOSCHED_D2FQ /* add NVME_CAP_AMS */
+#define NVME_CAP_AMS_WRRU(cap)	(((cap) >> 17) & 0x1)
+#endif
 
 #define NVME_CMB_BIR(cmbloc)	((cmbloc) & 0x7)
 #define NVME_CMB_OFST(cmbloc)	(((cmbloc) >> 12) & 0xfffff)
@@ -887,6 +890,15 @@ enum {
 	NVME_FWACT_REPL_ACTV	= (1 << 3),
 	NVME_FWACT_ACTV		= (2 << 3),
 };
+
+#ifdef CONFIG_IOSCHED_D2FQ /* WOO - set PW shift */
+enum {
+        NVME_FEAT_ARB_HPW_SHIFT = 24,
+        NVME_FEAT_ARB_MPW_SHIFT = 16,
+        NVME_FEAT_ARB_LPW_SHIFT = 8,
+        NVME_FEAT_ARB_AB_SHIFT  = 0,
+};
+#endif
 
 /* NVMe Namespace Write Protect State */
 enum {

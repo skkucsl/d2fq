@@ -50,6 +50,10 @@
 struct dentry *blk_debugfs_root;
 #endif
 
+#ifdef CONFIG_IOSCHED_D2FQ
+#include <linux/d2fq.h>
+#endif
+
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_complete);
@@ -523,6 +527,11 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 	init_waitqueue_head(&q->mq_freeze_wq);
 	mutex_init(&q->mq_freeze_lock);
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	d2fq_init_dgd(q);
+	spin_lock_init(&q->dgd_lock);
+	q->d2fq_en = false;
+#endif
 	/*
 	 * Init percpu_ref in atomic mode so that it's faster to shutdown.
 	 * See blk_register_queue() for details.

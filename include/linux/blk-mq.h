@@ -141,6 +141,9 @@ typedef int (map_queues_fn)(struct blk_mq_tag_set *set);
 typedef bool (busy_fn)(struct request_queue *);
 typedef void (complete_fn)(struct request *);
 typedef void (cleanup_rq_fn)(struct request *);
+#ifdef CONFIG_IOSCHED_D2FQ
+typedef int (set_weight_fn)(struct blk_mq_hw_ctx *, unsigned);
+#endif
 
 
 struct blk_mq_ops {
@@ -220,6 +223,10 @@ struct blk_mq_ops {
 	 * information about a request.
 	 */
 	void (*show_rq)(struct seq_file *m, struct request *rq);
+#endif
+
+#ifdef CONFIG_IOSCHED_D2FQ
+	set_weight_fn		*set_weight;
 #endif
 };
 

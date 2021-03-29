@@ -100,6 +100,9 @@
 #ifdef CONFIG_LOCKUP_DETECTOR
 #include <linux/nmi.h>
 #endif
+#ifdef CONFIG_IOSCHED_D2FQ
+#include <linux/d2fq.h>
+#endif
 
 #if defined(CONFIG_SYSCTL)
 
@@ -326,6 +329,71 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+#ifdef CONFIG_IOSCHED_D2FQ /* add proc variable */
+	{
+		.procname	= "d2fq_read_weight",
+		.data		= &sysctl_d2fq_read_weight,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_write_weight",
+		.data		= &sysctl_d2fq_write_weight,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_thrsh",
+		.data		= &sysctl_d2fq_thrsh,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_cls_base",
+		.data		= &sysctl_d2fq_cls_base,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_perqw",
+		.data		= &sysctl_d2fq_perqw,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_md_ratio",
+		.data		= &sysctl_d2fq_md_ratio,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_di_period",
+		.data		= &sysctl_d2fq_di_period,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_dw_en",
+		.data		= &sysctl_d2fq_dw_en,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "d2fq_dw_period",
+		.data		= &sysctl_d2fq_dw_period,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
 #ifdef CONFIG_SCHED_DEBUG
 	{
 		.procname	= "sched_min_granularity_ns",

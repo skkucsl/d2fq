@@ -166,6 +166,13 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 
 	if (!f.file)
 		return -EBADF;
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on syncfs */
+	if (f.file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	sb = f.file->f_path.dentry->d_sb;
 
 	down_read(&sb->s_umount);
@@ -191,6 +198,13 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on vfs_fsync_range */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	if (!file->f_op->fsync)
 		return -EINVAL;
 	if (!datasync && (inode->i_state & I_DIRTY_TIME))
@@ -370,6 +384,13 @@ int ksys_sync_file_range(int fd, loff_t offset, loff_t nbytes,
 
 	ret = -EBADF;
 	f = fdget(fd);
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on ksys_sync_file_range */
+	if (f.file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	if (f.file)
 		ret = sync_file_range(f.file, offset, nbytes, flags);
 

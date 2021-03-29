@@ -38,6 +38,10 @@
 #include "blk-stat.h"
 #include "blk-mq-sched.h"
 #include "blk-rq-qos.h"
+#ifdef CONFIG_IOSCHED_D2FQ
+#include <linux/d2fq.h>
+#include "d2fq.h"
+#endif
 
 static void blk_mq_poll_stats_start(struct request_queue *q);
 static void blk_mq_poll_stats_fn(struct blk_stat_callback *cb);
@@ -344,6 +348,11 @@ static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 	rq->end_io = NULL;
 	rq->end_io_data = NULL;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* init d2fq structure on request struct */
+	rq->d2fq_prio_cls = 0;
+	rq->d2fq = NULL;
+#endif
 	data->ctx->rq_dispatched[op_is_sync(op)]++;
 	refcount_set(&rq->ref, 1);
 	return rq;
@@ -364,9 +373,11 @@ static struct request *blk_mq_get_request(struct request_queue *q,
 		data->ctx = blk_mq_get_ctx(q);
 		clear_ctx_on_error = true;
 	}
+
 	if (likely(!data->hctx))
 		data->hctx = blk_mq_map_queue(q, data->cmd_flags,
 						data->ctx);
+
 	if (data->cmd_flags & REQ_NOWAIT)
 		data->flags |= BLK_MQ_REQ_NOWAIT;
 
@@ -569,6 +580,28 @@ static void __blk_mq_complete_request_remote(void *data)
 	q->mq_ops->complete(rq);
 }
 
+#ifdef CONFIG_IOSCHED_D2FQ
+static void blk_mq_d2fq_complet_request(struct request *rq)
+{
+	unsigned cls;
+	struct d2fq_data *dd;
+
+	if (unlikely(!(dd=rq->d2fq)))
+		return;
+
+#if !defined(CONFIG_IOSCHED_D2FQ_MULTISQ)
+	cls = rq->d2fq_prio_cls;
+#else
+	unsigned nr_sets_per_node = ((num_possible_cpus() / num_possible_nodes()) / 3);
+	unsigned nr_q = (num_possible_cpus() / num_possible_nodes()) / nr_sets_per_node;
+	unsigned cpu_id = rq->mq_ctx->cpu;
+	cls = (cpu_id % nr_q) + 1;
+#endif
+	__d2fq_update_vt(dd, cls, rq->__data_len);
+	return;
+}
+#endif
+
 static void __blk_mq_complete_request(struct request *rq)
 {
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
@@ -577,6 +610,11 @@ static void __blk_mq_complete_request(struct request *rq)
 	int cpu;
 
 	WRITE_ONCE(rq->state, MQ_RQ_COMPLETE);
+
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* end of I/O request blk_mq_complete_request */
+	blk_mq_d2fq_complet_request(rq);
+#endif
 	/*
 	 * Most of single queue controllers, there is only one irq vector
 	 * for handling IO completion, and the only irq's affinity is set
@@ -666,12 +704,38 @@ int blk_mq_request_started(struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_mq_request_started);
 
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+int blk_mq_d2fq_start_request(struct request *rq)
+{
+	int cls;
+	struct d2fq_global_data *dgd;
+	struct d2fq_data *dd;
+
+	if (q->d2fq_en == false)
+		return 0;
+
+	if (!(dgd = rq->q->dgd))
+		return 0;
+
+	dd = d2fq_assign_dd(dgd);
+	cls = __d2fq_start_request(dd);
+	rq->d2fq_prio_cls = cls;
+	return 0;
+}
+#endif
+
 void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 
 	trace_block_rq_issue(q, rq);
 
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	/* set tag for d2fq */
+	if (likely(current->flags & PF_D2FQ)) {
+		blk_mq_d2fq_start_request(rq);
+	}
+#endif
 	if (test_bit(QUEUE_FLAG_STATS, &q->queue_flags)) {
 		rq->io_start_time_ns = ktime_get_ns();
 		rq->stats_sectors = blk_rq_sectors(rq);
@@ -1405,6 +1469,7 @@ static inline int blk_mq_first_mapped_cpu(struct blk_mq_hw_ctx *hctx)
  * For now we just round-robin here, switching for every
  * BLK_MQ_CPU_WORK_BATCH queued items.
  */
+
 static int blk_mq_hctx_next_cpu(struct blk_mq_hw_ctx *hctx)
 {
 	bool tried = false;
@@ -3067,6 +3132,7 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 		set->nr_maps = 1;
 		set->queue_depth = min(64U, set->queue_depth);
 	}
+
 	/*
 	 * There is no use for more h/w queues than cpus if we just have
 	 * a single map

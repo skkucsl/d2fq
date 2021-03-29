@@ -1098,6 +1098,11 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 			fsnotify_open(f);
 			fd_install(fd, f);
 			trace_do_sys_open(tmp->name, flags, mode);
+#ifdef CONFIG_IOSCHED_D2FQ
+			/* set O_D2FQ flag on file open */
+			if (flags & O_D2FQ)
+				f->f_flags |= O_D2FQ;
+#endif
 		}
 	}
 	putname(tmp);

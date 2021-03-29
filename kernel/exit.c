@@ -68,6 +68,9 @@
 #include <asm/unistd.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
+#ifdef CONFIG_IOSCHED_D2FQ
+#include <linux/d2fq.h>
+#endif
 
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
@@ -924,6 +927,11 @@ void __noreturn do_exit(long code)
 	if (tsk->task_frag.page)
 		put_page(tsk->task_frag.page);
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* free d2fq struct on exit */
+	if (tsk->d2fq)
+		exit_d2fq(tsk);
+#endif
 	validate_creds_for_do_exit(tsk);
 
 	check_stack_usage();

@@ -454,6 +454,13 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 	if (unlikely(!access_ok(buf, count)))
 		return -EFAULT;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on vfs_read */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	ret = rw_verify_area(READ, file, pos, count);
 	if (!ret) {
 		if (count > MAX_RW_COUNT)
@@ -466,6 +473,10 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 		inc_syscr(current);
 	}
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* unset PF_D2FQ on vfs_read */
+	current->flags &= ~PF_D2FQ;
+#endif
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vfs_read);
@@ -575,6 +586,13 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 	if (unlikely(!access_ok(buf, count)))
 		return -EFAULT;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on vfs_write */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	ret = rw_verify_area(WRITE, file, pos, count);
 	if (!ret) {
 		if (count > MAX_RW_COUNT)
@@ -589,6 +607,10 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		file_end_write(file);
 	}
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* unset PF_D2FQ on vfs_write */
+	current->flags &= ~PF_D2FQ;
+#endif
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vfs_write);
@@ -687,7 +709,7 @@ ssize_t ksys_pwrite64(unsigned int fd, const char __user *buf,
 	f = fdget(fd);
 	if (f.file) {
 		ret = -ESPIPE;
-		if (f.file->f_mode & FMODE_PWRITE)  
+		if (f.file->f_mode & FMODE_PWRITE)
 			ret = vfs_write(f.file, buf, count, &pos);
 		fdput(f);
 	}
@@ -1018,12 +1040,23 @@ ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
 	struct iov_iter iter;
 	ssize_t ret;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on vfs_readv */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	ret = import_iovec(READ, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
 	if (ret >= 0) {
 		ret = do_iter_read(file, &iter, pos, flags);
 		kfree(iov);
 	}
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* unset PF_D2FQ on vfs_readv */
+	current->flags &= ~PF_D2FQ;
+#endif
 	return ret;
 }
 
@@ -1035,6 +1068,13 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
 	struct iov_iter iter;
 	ssize_t ret;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on vfs_writev */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	ret = import_iovec(WRITE, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
 	if (ret >= 0) {
 		file_start_write(file);
@@ -1042,6 +1082,11 @@ static ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
 		file_end_write(file);
 		kfree(iov);
 	}
+
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* unset PF_D2FQ on vfs_writev */
+	current->flags &= ~PF_D2FQ;
+#endif
 	return ret;
 }
 
@@ -1207,6 +1252,13 @@ static size_t compat_readv(struct file *file,
 	struct iov_iter iter;
 	ssize_t ret;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on compat_readv */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	ret = compat_import_iovec(READ, vec, vlen, UIO_FASTIOV, &iov, &iter);
 	if (ret >= 0) {
 		ret = do_iter_read(file, &iter, pos, flags);
@@ -1215,6 +1267,10 @@ static size_t compat_readv(struct file *file,
 	if (ret > 0)
 		add_rchar(current, ret);
 	inc_syscr(current);
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* unset PF_D2FQ on compat_readv */
+	current->flags &= ~PF_D2FQ;
+#endif
 	return ret;
 }
 
@@ -1315,6 +1371,13 @@ static size_t compat_writev(struct file *file,
 	struct iov_iter iter;
 	ssize_t ret;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* set PF_D2FQ on compat_writev */
+	if (file->f_flags & O_D2FQ) {
+		current->flags |= PF_D2FQ;
+		current->group_leader->flags |= PF_D2FQ;
+	}
+#endif
 	ret = compat_import_iovec(WRITE, vec, vlen, UIO_FASTIOV, &iov, &iter);
 	if (ret >= 0) {
 		file_start_write(file);
@@ -1325,6 +1388,11 @@ static size_t compat_writev(struct file *file,
 	if (ret > 0)
 		add_wchar(current, ret);
 	inc_syscw(current);
+
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* unset PF_D2FQ on compat_writev */
+	current->flags &= ~PF_D2FQ;
+#endif
 	return ret;
 }
 

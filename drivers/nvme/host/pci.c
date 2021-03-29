@@ -24,6 +24,11 @@
 #include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/sed-opal.h>
 #include <linux/pci-p2pdma.h>
+#ifdef CONFIG_IOSCHED_D2FQ
+#include <linux/cpumask.h> //
+#include <linux/nodemask.h> //
+#include <linux/d2fq.h>
+#endif
 
 #include "trace.h"
 #include "nvme.h"
@@ -84,6 +89,10 @@ struct nvme_queue;
 static void nvme_dev_disable(struct nvme_dev *dev, bool shutdown);
 static bool __nvme_disable_io_queues(struct nvme_dev *dev, u8 opcode);
 
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static bool msq_en;
+#endif
+
 /*
  * Represents an NVM Express device.  Each nvme_dev is a PCI function.
  */
@@ -140,10 +149,17 @@ static int io_queue_depth_set(const char *val, const struct kernel_param *kp)
 	return param_set_int(val, kp);
 }
 
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static inline unsigned int sq_idx(unsigned int qid, u32 stride, unsigned int sq_id, unsigned int max_qid)
+{
+	return (qid * 2 + (sq_id * 2 * max_qid)) * stride;
+}
+#else
 static inline unsigned int sq_idx(unsigned int qid, u32 stride)
 {
 	return qid * 2 * stride;
 }
+#endif
 
 static inline unsigned int cq_idx(unsigned int qid, u32 stride)
 {
@@ -163,17 +179,33 @@ struct nvme_queue {
 	struct nvme_dev *dev;
 	spinlock_t sq_lock;
 	struct nvme_command *sq_cmds;
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	spinlock_t sq_lock_h;
+	struct nvme_command *sq_cmds_h;
+	spinlock_t sq_lock_l;
+	struct nvme_command *sq_cmds_l;
+#endif
 	 /* only used for poll queues: */
 	spinlock_t cq_poll_lock ____cacheline_aligned_in_smp;
 	volatile struct nvme_completion *cqes;
 	struct blk_mq_tags **tags;
 	dma_addr_t sq_dma_addr;
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	dma_addr_t sq_dma_addr_h;
+	dma_addr_t sq_dma_addr_l;
+#endif
 	dma_addr_t cq_dma_addr;
 	u32 __iomem *q_db;
 	u16 q_depth;
 	u16 cq_vector;
 	u16 sq_tail;
 	u16 last_sq_tail;
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	u16 sq_tail_h;
+	u16 last_sq_tail_h;
+	u16 sq_tail_l;
+	u16 last_sq_tail_l;
+#endif
 	u16 cq_head;
 	u16 last_cq_head;
 	u16 qid;
@@ -184,8 +216,16 @@ struct nvme_queue {
 #define NVMEQ_DELETE_ERROR	2
 #define NVMEQ_POLLED		3
 	u32 *dbbuf_sq_db;
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	u32 *dbbuf_sq_db_h;
+	u32 *dbbuf_sq_db_l;
+#endif
 	u32 *dbbuf_cq_db;
 	u32 *dbbuf_sq_ei;
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	u32 *dbbuf_sq_ei_h;
+	u32 *dbbuf_sq_ei_l;
+#endif
 	u32 *dbbuf_cq_ei;
 	struct completion delete_done;
 };
@@ -220,10 +260,18 @@ static unsigned int max_queue_count(void)
 	return 1 + max_io_queues();
 }
 
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static inline unsigned int nvme_dbbuf_size(u32 stride)
 {
 	return (max_queue_count() * 8 * stride);
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static inline unsigned int nvme_dbbuf_size(u32 stride)
+{
+	return (max_queue_count() * 24 * stride);
+}
+#endif
 
 static int nvme_dbbuf_dma_alloc(struct nvme_dev *dev)
 {
@@ -266,6 +314,7 @@ static void nvme_dbbuf_dma_free(struct nvme_dev *dev)
 	}
 }
 
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static void nvme_dbbuf_init(struct nvme_dev *dev,
 			    struct nvme_queue *nvmeq, int qid)
 {
@@ -277,6 +326,24 @@ static void nvme_dbbuf_init(struct nvme_dev *dev,
 	nvmeq->dbbuf_sq_ei = &dev->dbbuf_eis[sq_idx(qid, dev->db_stride)];
 	nvmeq->dbbuf_cq_ei = &dev->dbbuf_eis[cq_idx(qid, dev->db_stride)];
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static void nvme_dbbuf_init(struct nvme_dev *dev,
+			    struct nvme_queue *nvmeq, int qid)
+{
+	if (!dev->dbbuf_dbs || !qid)
+		return;
+
+	nvmeq->dbbuf_sq_db   = &dev->dbbuf_dbs[sq_idx(qid, dev->db_stride, 0, dev->max_qid)];
+	nvmeq->dbbuf_sq_db_h = &dev->dbbuf_dbs[sq_idx(qid, dev->db_stride, 1, dev->max_qid)];
+	nvmeq->dbbuf_sq_db_l = &dev->dbbuf_dbs[sq_idx(qid, dev->db_stride, 2, dev->max_qid)];
+	nvmeq->dbbuf_sq_ei   = &dev->dbbuf_eis[sq_idx(qid, dev->db_stride, 0, dev->max_qid)];
+	nvmeq->dbbuf_sq_ei_h = &dev->dbbuf_eis[sq_idx(qid, dev->db_stride, 1, dev->max_qid)];
+	nvmeq->dbbuf_sq_ei_l = &dev->dbbuf_eis[sq_idx(qid, dev->db_stride, 2, dev->max_qid)];
+	nvmeq->dbbuf_cq_db = &dev->dbbuf_dbs[cq_idx(qid, dev->db_stride)];
+	nvmeq->dbbuf_cq_ei = &dev->dbbuf_eis[cq_idx(qid, dev->db_stride)];
+}
+#endif
 
 static void nvme_dbbuf_set(struct nvme_dev *dev)
 {
@@ -495,6 +562,69 @@ static void nvme_submit_cmd(struct nvme_queue *nvmeq, struct nvme_command *cmd,
 	spin_unlock(&nvmeq->sq_lock);
 }
 
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static inline void nvme_write_sq_db_h(struct nvme_queue *nvmeq, bool write_sq)
+{
+	unsigned db_size = nvmeq->dev->db_stride * 2 * nvmeq->dev->max_qid;
+
+	if (!write_sq) {
+		u16 next_tail = nvmeq->sq_tail_h + 1;
+
+		if (next_tail == nvmeq->q_depth)
+			next_tail = 0;
+		if (next_tail != nvmeq->last_sq_tail_h)
+			return;
+	}
+
+	if (nvme_dbbuf_update_and_check_event(nvmeq->sq_tail_h,
+			nvmeq->dbbuf_sq_db_h, nvmeq->dbbuf_sq_ei_h))
+		writel(nvmeq->sq_tail_h, nvmeq->q_db + db_size * 1);
+	nvmeq->last_sq_tail_h = nvmeq->sq_tail_h;
+}
+
+static inline void nvme_write_sq_db_l(struct nvme_queue *nvmeq, bool write_sq)
+{
+	unsigned db_size = nvmeq->dev->db_stride * 2 * nvmeq->dev->max_qid;
+
+	if (!write_sq) {
+		u16 next_tail = nvmeq->sq_tail_l + 1;
+
+		if (next_tail == nvmeq->q_depth)
+			next_tail = 0;
+		if (next_tail != nvmeq->last_sq_tail_l)
+			return;
+	}
+
+	if (nvme_dbbuf_update_and_check_event(nvmeq->sq_tail_l,
+			nvmeq->dbbuf_sq_db_l, nvmeq->dbbuf_sq_ei_l))
+		writel(nvmeq->sq_tail_l, nvmeq->q_db + db_size * 2);
+	nvmeq->last_sq_tail_l = nvmeq->sq_tail_l;
+}
+
+static void nvme_submit_cmd_h(struct nvme_queue *nvmeq, struct nvme_command *cmd,
+			    bool write_sq)
+{
+	spin_lock(&nvmeq->sq_lock_h);
+	memcpy(&nvmeq->sq_cmds_h[nvmeq->sq_tail_h], cmd, sizeof(*cmd));
+	if (++nvmeq->sq_tail_h == nvmeq->q_depth)
+		nvmeq->sq_tail_h = 0;
+	nvme_write_sq_db_h(nvmeq, write_sq);
+	spin_unlock(&nvmeq->sq_lock_h);
+}
+
+static void nvme_submit_cmd_l(struct nvme_queue *nvmeq, struct nvme_command *cmd,
+			    bool write_sq)
+{
+	spin_lock(&nvmeq->sq_lock_l);
+	memcpy(&nvmeq->sq_cmds_l[nvmeq->sq_tail_l], cmd, sizeof(*cmd));
+	if (++nvmeq->sq_tail_l == nvmeq->q_depth)
+		nvmeq->sq_tail_l = 0;
+	nvme_write_sq_db_l(nvmeq, write_sq);
+	spin_unlock(&nvmeq->sq_lock_l);
+}
+#endif
+
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static void nvme_commit_rqs(struct blk_mq_hw_ctx *hctx)
 {
 	struct nvme_queue *nvmeq = hctx->driver_data;
@@ -504,6 +634,26 @@ static void nvme_commit_rqs(struct blk_mq_hw_ctx *hctx)
 		nvme_write_sq_db(nvmeq, true);
 	spin_unlock(&nvmeq->sq_lock);
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static void nvme_commit_rqs(struct blk_mq_hw_ctx *hctx)
+{
+	struct nvme_queue *nvmeq = hctx->driver_data;
+
+	spin_lock(&nvmeq->sq_lock);
+	if (nvmeq->sq_tail != nvmeq->last_sq_tail)
+		nvme_write_sq_db(nvmeq, true);
+	spin_unlock(&nvmeq->sq_lock);
+	spin_lock(&nvmeq->sq_lock_h);
+	if (nvmeq->sq_tail_h != nvmeq->last_sq_tail_h)
+		nvme_write_sq_db_h(nvmeq, true);
+	spin_unlock(&nvmeq->sq_lock_h);
+	spin_lock(&nvmeq->sq_lock_l);
+	if (nvmeq->sq_tail_l != nvmeq->last_sq_tail_l)
+		nvme_write_sq_db_l(nvmeq, true);
+	spin_unlock(&nvmeq->sq_lock_l);
+}
+#endif
 
 static void **nvme_pci_iod_list(struct request *req)
 {
@@ -865,6 +1015,57 @@ static blk_status_t nvme_map_metadata(struct nvme_dev *dev, struct request *req,
 	return 0;
 }
 
+#ifdef CONFIG_IOSCHED_D2FQ
+int d2fq_set_weight (struct blk_mq_hw_ctx *hctx, unsigned adj)
+{
+	struct nvme_queue *nvmeq = hctx->driver_data;
+	struct nvme_ctrl *ctrl = &nvmeq->dev->ctrl;
+	u32 arb;
+        u32 ab;
+        u32 result;
+        int status;
+	u32 l_wght, m_wght, h_wght, base;
+
+	/* device dose not support NVMe WRR */
+	if (!(ctrl->ctrl_config & NVME_CC_AMS_WRRU))
+		return -EINVAL;
+
+	#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	/* device dose not support NVMe WRR */
+	if (msq_en == false)
+		return -EINVAL;
+	#endif
+
+	if (unlikely(adj < 3))
+		adj = 3;
+	else if (unlikely(adj > 256))
+		adj = 256;
+
+	l_wght = 256 / adj;
+	base = int_sqrt(adj);
+	if (adj > base*base)
+		base++;
+	m_wght = l_wght * base;
+	h_wght = l_wght * adj;
+
+        arb  = 0;
+        ab   = 0x00;
+
+        arb |= (u32)((h_wght - 1) << NVME_FEAT_ARB_HPW_SHIFT);
+        arb |= (u32)((m_wght - 1) << NVME_FEAT_ARB_MPW_SHIFT);
+        arb |= (u32)((l_wght - 1) << NVME_FEAT_ARB_LPW_SHIFT);
+
+        arb |= ab << NVME_FEAT_ARB_AB_SHIFT;
+
+        status = nvme_set_features(ctrl, NVME_FEAT_ARBITRATION, arb, NULL, 0, &result);
+
+	printk(KERN_INFO "d2fq: %d/%d/%d h/m/l priority",
+		h_wght, m_wght, l_wght);
+
+	return 0;
+}
+#endif
+
 /*
  * NOTE: ns is NULL when called on the admin queue.
  */
@@ -907,7 +1108,17 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	}
 
 	blk_mq_start_request(req);
+
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	switch (req->d2fq_prio_cls) {
+	case D2FQ_CLS_HIGH:  	nvme_submit_cmd_h(nvmeq, &cmnd, bd->last); break;
+	case D2FQ_CLS_MEDIUM:  	nvme_submit_cmd  (nvmeq, &cmnd, bd->last); break;
+	case D2FQ_CLS_LOW:  	nvme_submit_cmd_l(nvmeq, &cmnd, bd->last); break;
+	default: 		nvme_submit_cmd  (nvmeq, &cmnd, bd->last); break;
+	}
+#else
 	nvme_submit_cmd(nvmeq, &cmnd, bd->last);
+#endif
 	return BLK_STS_OK;
 out_unmap_data:
 	nvme_unmap_data(dev, req);
@@ -972,7 +1183,10 @@ static inline void nvme_handle_cqe(struct nvme_queue *nvmeq, u16 idx)
 	}
 
 	req = blk_mq_tag_to_rq(*nvmeq->tags, cqe->command_id);
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
+	/* D2FQ use multiple SQ for a queue pair */
 	trace_nvme_sq(req, cqe->sq_head, nvmeq->sq_tail);
+#endif
 	nvme_end_request(req, cqe->status, cqe->result);
 }
 
@@ -1139,6 +1353,14 @@ static int adapter_alloc_cq(struct nvme_dev *dev, u16 qid,
 	return nvme_submit_sync_cmd(dev->ctrl.admin_q, &c, NULL, 0);
 }
 
+char *sq_class_to_name[] = {
+	[D2FQ_CLS_HIGH] 	= "H",
+	[D2FQ_CLS_MEDIUM]	= "M",
+	[D2FQ_CLS_LOW]		= "L",
+	[0]			= "M-dft"
+};
+
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
 						struct nvme_queue *nvmeq)
 {
@@ -1146,6 +1368,30 @@ static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
 	struct nvme_command c;
 	int flags = NVME_QUEUE_PHYS_CONTIG;
 
+	#ifdef CONFIG_IOSCHED_D2FQ
+	/* Set priority class on SQ */
+	unsigned nr_sets_per_node = ((num_possible_cpus() / num_possible_nodes()) / 3);
+	unsigned nr_q = (num_possible_cpus() / num_possible_nodes())/ nr_sets_per_node;
+	unsigned sq_class;
+
+	if ( (ctrl->ctrl_config & NVME_CC_AMS_WRRU) && nr_sets_per_node > 0) {
+		if (nvmeq->qid == 0) {
+			flags |= NVME_SQ_PRIO_URGENT;
+			goto out;
+		}
+
+		sq_class = ((nvmeq->qid-1) % nr_q) + 1;
+
+		switch (sq_class) {
+		case D2FQ_CLS_HIGH: 	flags |= NVME_SQ_PRIO_HIGH;	break;
+		case D2FQ_CLS_MEDIUM:	flags |= NVME_SQ_PRIO_MEDIUM;	break;
+		case D2FQ_CLS_LOW: 	flags |= NVME_SQ_PRIO_LOW;	break;
+		default:		flags |= NVME_SQ_PRIO_MEDIUM;	break;
+		}
+
+		dev_info(ctrl->device, "d2fq: qid:%3u [%s]", qid, sq_class_to_name[sq_class]);
+	} else
+	#endif
 	/*
 	 * Some drives have a bug that auto-enables WRRU if MEDIUM isn't
 	 * set. Since URGENT priority is zeroes, it makes all queues
@@ -1154,6 +1400,7 @@ static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
 	if (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
 		flags |= NVME_SQ_PRIO_MEDIUM;
 
+out:
 	/*
 	 * Note: we (ab)use the fact that the prp fields survive if no data
 	 * is attached to the request.
@@ -1168,16 +1415,88 @@ static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
 
 	return nvme_submit_sync_cmd(dev->ctrl.admin_q, &c, NULL, 0);
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
+						struct nvme_queue *nvmeq)
+{
+	struct nvme_ctrl *ctrl = &dev->ctrl;
+	struct nvme_command c;
+	int flags = NVME_QUEUE_PHYS_CONTIG;
+	/*
+	 * Note: we (ab)use the fact that the prp fields survive if no data
+	 * is attached to the request.
+	 */
+	struct nvme_command c_h, c_l;
+	int flags_h = NVME_QUEUE_PHYS_CONTIG;
+	int flags_l = NVME_QUEUE_PHYS_CONTIG;
+	int ret;
+
+	if ( (ctrl->ctrl_config & NVME_CC_AMS_WRRU) ) {
+		flags   |= NVME_SQ_PRIO_MEDIUM;
+		flags_h |= NVME_SQ_PRIO_HIGH;
+		flags_l |= NVME_SQ_PRIO_LOW;
+	} else if (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ) {
+		flags   |= NVME_SQ_PRIO_MEDIUM;
+		flags_h |= NVME_SQ_PRIO_MEDIUM;
+		flags_l |= NVME_SQ_PRIO_MEDIUM;
+	}
+
+	memset(&c, 0, sizeof(c));
+	c.create_sq.opcode = nvme_admin_create_sq;
+	c.create_sq.prp1 = cpu_to_le64(nvmeq->sq_dma_addr);
+	c.create_sq.sqid = cpu_to_le16(qid + 0 * dev->max_qid);
+	c.create_sq.qsize = cpu_to_le16(nvmeq->q_depth - 1);
+	c.create_sq.sq_flags = cpu_to_le16(flags);
+	c.create_sq.cqid = cpu_to_le16(qid);
+
+	memset(&c_h, 0, sizeof(c_h));
+	c_h.create_sq.opcode = nvme_admin_create_sq;
+	c_h.create_sq.prp1 = cpu_to_le64(nvmeq->sq_dma_addr_h);
+	c_h.create_sq.sqid = cpu_to_le16(qid + 1 * dev->max_qid);
+	c_h.create_sq.qsize = cpu_to_le16(nvmeq->q_depth - 1);
+	c_h.create_sq.sq_flags = cpu_to_le16(flags_h);
+	c_h.create_sq.cqid = cpu_to_le16(qid);
+
+	memset(&c_l, 0, sizeof(c_l));
+	c_l.create_sq.opcode = nvme_admin_create_sq;
+	c_l.create_sq.prp1 = cpu_to_le64(nvmeq->sq_dma_addr_l);
+	c_l.create_sq.sqid = cpu_to_le16(qid + 2 * dev->max_qid);
+	c_l.create_sq.qsize = cpu_to_le16(nvmeq->q_depth - 1);
+	c_l.create_sq.sq_flags = cpu_to_le16(flags_l);
+	c_l.create_sq.cqid = cpu_to_le16(qid);
+
+	if ((ret=nvme_submit_sync_cmd(dev->ctrl.admin_q, &c_h, NULL, 0)) != 0) {
+		msq_en = false;	
+		dev_info(dev->ctrl.device, "d2fq: FAIL alloc high sq qid %2x", qid);
+	}
+	if ((ret=nvme_submit_sync_cmd(dev->ctrl.admin_q, &c_l, NULL, 0)) != 0) {
+		msq_en = false;
+		dev_info(dev->ctrl.device, "d2fq: FAIL alloc low sq qid %2x", qid);
+	}
+	return nvme_submit_sync_cmd(dev->ctrl.admin_q, &c,   NULL, 0);
+}
+#endif
 
 static int adapter_delete_cq(struct nvme_dev *dev, u16 cqid)
 {
 	return adapter_delete_queue(dev, nvme_admin_delete_cq, cqid);
 }
 
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static int adapter_delete_sq(struct nvme_dev *dev, u16 sqid)
 {
 	return adapter_delete_queue(dev, nvme_admin_delete_sq, sqid);
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static int adapter_delete_sq(struct nvme_dev *dev, u16 qid)
+{
+	adapter_delete_queue(dev, nvme_admin_delete_sq, qid + 2 * dev->max_qid);
+	adapter_delete_queue(dev, nvme_admin_delete_sq, qid + 1 * dev->max_qid);
+	return adapter_delete_queue(dev, nvme_admin_delete_sq, qid);
+}
+#endif
 
 static void abort_endio(struct request *req, blk_status_t error)
 {
@@ -1353,9 +1672,21 @@ static void nvme_free_queue(struct nvme_queue *nvmeq)
 	if (test_and_clear_bit(NVMEQ_SQ_CMB, &nvmeq->flags)) {
 		pci_free_p2pmem(to_pci_dev(nvmeq->dev->dev),
 				nvmeq->sq_cmds, SQ_SIZE(nvmeq->q_depth));
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+		pci_free_p2pmem(to_pci_dev(nvmeq->dev->dev),
+				nvmeq->sq_cmds_h, SQ_SIZE(nvmeq->q_depth));
+		pci_free_p2pmem(to_pci_dev(nvmeq->dev->dev),
+				nvmeq->sq_cmds_l, SQ_SIZE(nvmeq->q_depth));
+#endif
 	} else {
 		dma_free_coherent(nvmeq->dev->dev, SQ_SIZE(nvmeq->q_depth),
 				nvmeq->sq_cmds, nvmeq->sq_dma_addr);
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+		dma_free_coherent(nvmeq->dev->dev, SQ_SIZE(nvmeq->q_depth),
+				nvmeq->sq_cmds_h, nvmeq->sq_dma_addr_h);
+		dma_free_coherent(nvmeq->dev->dev, SQ_SIZE(nvmeq->q_depth),
+				nvmeq->sq_cmds_l, nvmeq->sq_dma_addr_l);
+#endif
 	}
 }
 
@@ -1433,6 +1764,7 @@ static int nvme_cmb_qdepth(struct nvme_dev *dev, int nr_io_queues,
 	return q_depth;
 }
 
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static int nvme_alloc_sq_cmds(struct nvme_dev *dev, struct nvme_queue *nvmeq,
 				int qid, int depth)
 {
@@ -1458,6 +1790,94 @@ static int nvme_alloc_sq_cmds(struct nvme_dev *dev, struct nvme_queue *nvmeq,
 		return -ENOMEM;
 	return 0;
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static int nvme_alloc_sq_cmds(struct nvme_dev *dev, struct nvme_queue *nvmeq,
+				int qid, int depth)
+{
+	struct pci_dev *pdev = to_pci_dev(dev->dev);
+
+	if (qid && dev->cmb_use_sqes && (dev->cmbsz & NVME_CMBSZ_SQS)) {
+		nvmeq->sq_cmds = pci_alloc_p2pmem(pdev, SQ_SIZE(depth));
+		if (nvmeq->sq_cmds) {
+			nvmeq->sq_dma_addr = pci_p2pmem_virt_to_bus(pdev,
+							nvmeq->sq_cmds);
+			if (!nvmeq->sq_dma_addr)
+				goto free_m;
+		}
+
+		nvmeq->sq_cmds_h = pci_alloc_p2pmem(pdev, SQ_SIZE(depth));
+		if (nvmeq->sq_cmds_h) {
+			nvmeq->sq_dma_addr_h = pci_p2pmem_virt_to_bus(pdev,
+							nvmeq->sq_cmds_h);
+			if (!nvmeq->sq_dma_addr_h)
+				goto free_h;
+		}
+
+		nvmeq->sq_cmds_l = pci_alloc_p2pmem(pdev, SQ_SIZE(depth));
+		if (nvmeq->sq_cmds_l) {
+			nvmeq->sq_dma_addr_l = pci_p2pmem_virt_to_bus(pdev,
+							nvmeq->sq_cmds_l);
+			if (!nvmeq->sq_dma_addr_l)
+				goto free_l;
+		}
+
+		set_bit(NVMEQ_SQ_CMB, &nvmeq->flags);
+		return 0;
+
+free_l:		pci_free_p2pmem(pdev, nvmeq->sq_cmds_l, SQ_SIZE(depth));
+free_h:		pci_free_p2pmem(pdev, nvmeq->sq_cmds_h, SQ_SIZE(depth));
+free_m:		pci_free_p2pmem(pdev, nvmeq->sq_cmds,   SQ_SIZE(depth));
+	} else if (!qid)
+		goto one_sq;
+
+	nvmeq->sq_cmds   = dma_alloc_coherent(dev->dev, SQ_SIZE(depth),
+				&nvmeq->sq_dma_addr  , GFP_KERNEL);
+	nvmeq->sq_cmds_h = dma_alloc_coherent(dev->dev, SQ_SIZE(depth),
+				&nvmeq->sq_dma_addr_h, GFP_KERNEL);
+	nvmeq->sq_cmds_l = dma_alloc_coherent(dev->dev, SQ_SIZE(depth),
+				&nvmeq->sq_dma_addr_l, GFP_KERNEL);
+
+	if (!nvmeq->sq_cmds) {
+		dev_info(dev->ctrl.device, "d2fq: FAIL alloc sq cmds qid %2x [m]", qid);
+		return -ENOMEM;
+	}
+	if (!nvmeq->sq_cmds_h) {
+		dev_info(dev->ctrl.device, "d2fq: FAIL alloc sq cmds qid %2x [h]", qid);
+		return -ENOMEM;
+	}
+	if (!nvmeq->sq_cmds_l) {
+		dev_info(dev->ctrl.device, "d2fq: FAIL alloc sq cmds qid %2x [l]", qid);
+		return -ENOMEM;
+	}
+
+	dev_info(dev->ctrl.device, "d2fq: alloc sq cmds qid %2x done.", qid);
+
+	return 0;
+
+one_sq:
+	if (qid && dev->cmb_use_sqes && (dev->cmbsz & NVME_CMBSZ_SQS)) {
+		nvmeq->sq_cmds = pci_alloc_p2pmem(pdev, SQ_SIZE(depth));
+		if (nvmeq->sq_cmds) {
+			nvmeq->sq_dma_addr = pci_p2pmem_virt_to_bus(pdev,
+							nvmeq->sq_cmds);
+			if (nvmeq->sq_dma_addr) {
+				set_bit(NVMEQ_SQ_CMB, &nvmeq->flags);
+				return 0;
+			}
+
+			pci_free_p2pmem(pdev, nvmeq->sq_cmds, SQ_SIZE(depth));
+		}
+	}
+
+	nvmeq->sq_cmds = dma_alloc_coherent(dev->dev, SQ_SIZE(depth),
+				&nvmeq->sq_dma_addr, GFP_KERNEL);
+	if (!nvmeq->sq_cmds)
+		return -ENOMEM;
+
+	return 0;
+}
+#endif
 
 static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 {
@@ -1476,9 +1896,14 @@ static int nvme_alloc_queue(struct nvme_dev *dev, int qid, int depth)
 
 	nvmeq->dev = dev;
 	spin_lock_init(&nvmeq->sq_lock);
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	spin_lock_init(&nvmeq->sq_lock_h);
+	spin_lock_init(&nvmeq->sq_lock_l);
+#endif
 	spin_lock_init(&nvmeq->cq_poll_lock);
 	nvmeq->cq_head = 0;
 	nvmeq->cq_phase = 1;
+
 	nvmeq->q_db = &dev->dbs[qid * 2 * dev->db_stride];
 	nvmeq->q_depth = depth;
 	nvmeq->qid = qid;
@@ -1513,9 +1938,16 @@ static void nvme_init_queue(struct nvme_queue *nvmeq, u16 qid)
 
 	nvmeq->sq_tail = 0;
 	nvmeq->last_sq_tail = 0;
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+	nvmeq->sq_tail_h = 0;
+	nvmeq->last_sq_tail_h = 0;
+	nvmeq->sq_tail_l = 0;
+	nvmeq->last_sq_tail_l = 0;
+#endif
 	nvmeq->cq_head = 0;
 	nvmeq->cq_phase = 1;
 	nvmeq->q_db = &dev->dbs[qid * 2 * dev->db_stride];
+
 	memset((void *)nvmeq->cqes, 0, CQ_SIZE(nvmeq->q_depth));
 	nvme_dbbuf_init(dev, nvmeq, qid);
 	dev->online_queues++;
@@ -1588,6 +2020,9 @@ static const struct blk_mq_ops nvme_mq_ops = {
 	.map_queues	= nvme_pci_map_queues,
 	.timeout	= nvme_timeout,
 	.poll		= nvme_poll,
+#ifdef CONFIG_IOSCHED_D2FQ
+	.set_weight	= d2fq_set_weight,
+#endif
 };
 
 static void nvme_dev_remove_admin(struct nvme_dev *dev)
@@ -1637,10 +2072,18 @@ static int nvme_alloc_admin_tags(struct nvme_dev *dev)
 	return 0;
 }
 
+#ifndef CONFIG_IOSCHED_D2FQ_MULTISQ
 static unsigned long db_bar_size(struct nvme_dev *dev, unsigned nr_io_queues)
 {
 	return NVME_REG_DBS + ((nr_io_queues + 1) * 8 * dev->db_stride);
 }
+#endif
+#ifdef CONFIG_IOSCHED_D2FQ_MULTISQ
+static unsigned long db_bar_size(struct nvme_dev *dev, unsigned nr_io_queues)
+{
+	return NVME_REG_DBS + ((nr_io_queues + 1) * 24 * dev->db_stride);
+}
+#endif
 
 static int nvme_remap_bar(struct nvme_dev *dev, unsigned long size)
 {
@@ -2102,7 +2545,7 @@ static int nvme_setup_io_queues(struct nvme_dev *dev)
 
 	if (nr_io_queues == 0)
 		return 0;
-	
+
 	clear_bit(NVMEQ_ENABLED, &adminq->flags);
 
 	if (dev->cmb_use_sqes) {
@@ -2315,6 +2758,11 @@ static int nvme_pci_enable(struct nvme_dev *dev)
 
 	dev->q_depth = min_t(int, NVME_CAP_MQES(dev->ctrl.cap) + 1,
 				io_queue_depth);
+#ifdef CONFIG_IOSCHED_D2FQ_VERBOSE /* print io_queue_depth */
+	dev_info(dev->ctrl.device,
+		"d2fq: io_queue_depth: %4d",
+		dev->q_depth);
+#endif
 	dev->db_stride = 1 << NVME_CAP_STRIDE(dev->ctrl.cap);
 	dev->dbs = dev->bar + 4096;
 

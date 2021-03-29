@@ -1539,8 +1539,19 @@ static int aio_read(struct kiocb *req, const struct iocb *iocb,
 	if (ret < 0)
 		return ret;
 	ret = rw_verify_area(READ, file, &req->ki_pos, iov_iter_count(&iter));
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* Setting PF_D2FQ on aio_read */
+	if (!ret) {
+		if (file->f_flags & O_D2FQ) {
+			current->flags |= PF_D2FQ;
+			current->group_leader->flags |= PF_D2FQ;
+		}
+		aio_rw_done(req, call_read_iter(file, req, &iter));
+	}
+#else
 	if (!ret)
 		aio_rw_done(req, call_read_iter(file, req, &iter));
+#endif
 	kfree(iovec);
 	return ret;
 }
@@ -1579,8 +1590,18 @@ static int aio_write(struct kiocb *req, const struct iocb *iocb,
 			__sb_start_write(file_inode(file)->i_sb, SB_FREEZE_WRITE, true);
 			__sb_writers_release(file_inode(file)->i_sb, SB_FREEZE_WRITE);
 		}
+#ifdef CONFIG_IOSCHED_D2FQ
+		/* Setting PF_D2FQ on aio_write */
+		if (file->f_flags & O_D2FQ) {
+			current->flags |= PF_D2FQ;
+			current->group_leader->flags |= PF_D2FQ;
+		}
 		req->ki_flags |= IOCB_WRITE;
 		aio_rw_done(req, call_write_iter(file, req, &iter));
+#else
+		req->ki_flags |= IOCB_WRITE;
+		aio_rw_done(req, call_write_iter(file, req, &iter));
+#endif
 	}
 	kfree(iovec);
 	return ret;

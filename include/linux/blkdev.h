@@ -27,6 +27,10 @@
 #include <linux/percpu-refcount.h>
 #include <linux/scatterlist.h>
 #include <linux/blkzoned.h>
+#ifdef CONFIG_IOSCHED_D2FQ
+#include <linux/d2fq.h>
+struct d2fq_global_data;
+#endif
 
 struct module;
 struct scsi_ioctl_command;
@@ -149,6 +153,11 @@ struct request {
 
 	struct list_head queuelist;
 
+#ifdef CONFIG_IOSCHED_D2FQ
+	/* tag task_struct on request struct */
+	u8	d2fq_prio_cls;
+	void 	*d2fq;
+#endif
 	/*
 	 * The hash is used inside the scheduler, and killed once the
 	 * request reaches the dispatch list. The ipi_list is only used
@@ -496,6 +505,13 @@ struct request_queue {
 	struct blkcg_gq		*root_blkg;
 	struct list_head	blkg_list;
 #endif
+
+#ifdef CONFIG_IOSCHED_D2FQ
+	struct d2fq_global_data	*dgd; /* d2fq global data */
+	spinlock_t		dgd_lock;
+	unsigned int 		d2fq_en;
+#endif
+
 
 	struct queue_limits	limits;
 

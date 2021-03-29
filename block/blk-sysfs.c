@@ -16,6 +16,9 @@
 #include "blk-mq.h"
 #include "blk-mq-debugfs.h"
 #include "blk-wbt.h"
+#ifdef CONFIG_IOSCHED_D2FQ
+#include "d2fq.h"
+#endif
 
 struct queue_sysfs_entry {
 	struct attribute attr;
@@ -579,6 +582,14 @@ static struct queue_sysfs_entry queue_iosched_entry = {
 	.store = elv_iosched_store,
 };
 
+#ifdef CONFIG_IOSCHED_D2FQ
+static struct queue_sysfs_entry queue_d2fq_en_entry = {
+	.attr = {.name = "d2fq_en", .mode = 0644 },
+	.show = queue_d2fq_en_show,
+	.store = queue_d2fq_en_store,
+};
+#endif
+
 static struct queue_sysfs_entry queue_hw_sector_size_entry = {
 	.attr = {.name = "hw_sector_size", .mode = 0444 },
 	.show = queue_logical_block_size_show,
@@ -738,6 +749,9 @@ static struct attribute *queue_attrs[] = {
 	&queue_max_integrity_segments_entry.attr,
 	&queue_max_segment_size_entry.attr,
 	&queue_iosched_entry.attr,
+#ifdef CONFIG_IOSCHED_D2FQ
+	&queue_d2fq_en_entry.attr,
+#endif
 	&queue_hw_sector_size_entry.attr,
 	&queue_logical_block_size_entry.attr,
 	&queue_physical_block_size_entry.attr,

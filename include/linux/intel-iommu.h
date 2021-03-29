@@ -166,7 +166,7 @@
 #define ecap_pasid(e)		((e >> 40) & 0x1)
 #define ecap_pss(e)		((e >> 35) & 0x1f)
 #define ecap_eafs(e)		((e >> 34) & 0x1)
-#define ecap_nwfs(e)		((e >> 33) & 0x1)
+#define ecap_d2fq(e)		((e >> 33) & 0x1)
 #define ecap_srs(e)		((e >> 31) & 0x1)
 #define ecap_ers(e)		((e >> 30) & 0x1)
 #define ecap_prs(e)		((e >> 29) & 0x1)
