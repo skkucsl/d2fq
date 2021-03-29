@@ -23,6 +23,6 @@ month = feb,
 ~~~~
 
 ## How to Use
-1. Please make sure the option `CONFIG_IOSCHED_D2FQ` is enabled in the kernel config. If your NVMe device has a plenty of NVMe SQs, you can also enable `CONFIG_IOSCHED_D2FQ_MULTISQ` to allow each core to have isolated three SQs (low, med, high). Without this option, three adjacent cores share the three SQs (low, med, high). For more information, please refer to the paper. 
+1. Compile the kernel with the config `CONFIG_IOSCHED_D2FQ` enabled. If your NVMe device has a plenty of NVMe SQs, you can also enable `CONFIG_IOSCHED_D2FQ_MULTISQ` to allow each core to have isolated three SQs (low, med, high). Without this config, three adjacent cores share three SQs (low, med, high). For more information, please refer to the paper. 
 
 1. To use D2FQ, a file should be opened with a flag `O_D2FQ` which is defined in `uapi/asm-generic/fcntl.h`
