@@ -75,7 +75,7 @@ config NVME_TCP
 	  If unsure, say N.
 
 config IOSCHED_D2FQ
-	tristate "Device Drict Fair Queueing (D2FQ)"
+	tristate "Device-Direct Fair Queueing (D2FQ)"
 	help
 	  This provides fair I/O scheduling for NVMe device using 
 	  WRRU arbitration.
@@ -85,8 +85,10 @@ config IOSCHED_D2FQ_MULTISQ
 	depends on IOSCHED_D2FQ
 	default n
 	help
-	  This provides fair scheduling for NVMe device using 
-	  WRRU arbitration.
+	  This allows each core to have isolated three SQs (low, med, high). 
+	  This option works only when the number of NVMe queues is three times
+	  more than the number of cores. Without this config, three adjacent cores
+	  share the three SQs (low, med, high).
 
 config IOSCHED_D2FQ_VERBOSE
 	depends on IOSCHED_D2FQ

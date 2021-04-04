@@ -359,13 +359,6 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 	{
-		.procname	= "d2fq_perqw",
-		.data		= &sysctl_d2fq_perqw,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
-	},
-	{
 		.procname	= "d2fq_md_ratio",
 		.data		= &sysctl_d2fq_md_ratio,
 		.maxlen		= sizeof(unsigned int),
