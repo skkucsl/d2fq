@@ -711,7 +711,7 @@ int blk_mq_d2fq_start_request(struct request *rq)
 	struct d2fq_global_data *dgd;
 	struct d2fq_data *dd;
 
-	if (q->d2fq_en == false)
+	if (rq->q->d2fq_en == false)
 		return 0;
 
 	if (!(dgd = rq->q->dgd))

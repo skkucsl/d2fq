@@ -7,7 +7,6 @@ extern unsigned int sysctl_d2fq_read_weight;
 extern unsigned int sysctl_d2fq_write_weight;
 extern unsigned int sysctl_d2fq_thrsh;
 extern unsigned int sysctl_d2fq_cls_base;
-extern unsigned int sysctl_d2fq_perqw;
 extern 		int sysctl_d2fq_md_ratio;
 extern unsigned int sysctl_d2fq_di_period;
 extern unsigned int sysctl_d2fq_dw_en;
