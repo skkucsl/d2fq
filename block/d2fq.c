@@ -364,7 +364,8 @@ new_dd:
 	current->d2fq = (void*)dd;
 
 	dd->dgd		= dgd;
-	dd->vt_unit	= 1;
+	dd->weight = d2fq_ioprio_to_weight();
+	dd->vt_unit = 840 / dd->weight;
 	atomic64_set(&dd->lvt, gh_return_min(&dd->dgd->gh));
 	atomic64_set(&dd->lvt_last, gh_return_min(&dd->dgd->gh));
 
