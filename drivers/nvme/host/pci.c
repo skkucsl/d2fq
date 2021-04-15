@@ -1389,7 +1389,10 @@ static int adapter_alloc_sq(struct nvme_dev *dev, u16 qid,
 		default:		flags |= NVME_SQ_PRIO_MEDIUM;	break;
 		}
 
-		dev_info(ctrl->device, "d2fq: qid:%3u [%s]", qid, sq_class_to_name[sq_class]);
+		if (sq_class < RNG_D2FQ_CLS)
+			dev_info(ctrl->device, "d2fq: qid:%3u [%s]", qid, sq_class_to_name[sq_class]);
+		else
+			dev_info(ctrl->device, "d2fq: qid:%3u [M-dft]", qid);
 	} else
 	#endif
 	/*

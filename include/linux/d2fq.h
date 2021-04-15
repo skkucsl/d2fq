@@ -16,6 +16,7 @@ enum{
 	D2FQ_CLS_HIGH	= 1,
 	D2FQ_CLS_MEDIUM	= 2,
 	D2FQ_CLS_LOW	= 3,
+	RNG_D2FQ_CLS	= 4,
 };
 
 struct d2fq_data;
