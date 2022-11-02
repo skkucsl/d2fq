@@ -1,7 +1,7 @@
 # D2FQ
 [D2FQ](https://github.com/skkucsl/d2fq) is a fair-queueing I/O scheduler using the NVMe WRR queue arbitration feature. Different from other conventional fair-queueing block I/O schedulers, D2FQ does not stage I/O requests in the block layer but dispatches them immediately to an SSD. Consequently, D2FQ achieves low I/O latency as well as low CPU consumption. 
 
-This repository contains the implementation of D2FQ in the Linux kernel. We will open the source code as soon as possible. Please stay tuned. 
+This repository contains the implementation of D2FQ in the Linux kernel. 
 
 Please cite the following paper if you use D2FQ:
 
